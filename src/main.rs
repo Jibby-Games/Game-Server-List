@@ -512,4 +512,176 @@ mod tests {
         let result: Result<GameServer, String> = parse_connect_message(txt, ip, server_ip);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn parse_game_message_updates_players() {
+        let server = GameServer::new(
+            String::from("Test"),
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            false,
+            12345,
+            false,
+        );
+        let mut server_list = ServerList::new();
+        let server_id = server_list.add(server);
+
+        parse_game_message(&server_list, &server_id, r#"{"players":3}"#);
+
+        let updated = server_list.get(&Pagination::default());
+        assert_eq!(updated[0].players, 3);
+    }
+
+    #[test]
+    fn parse_game_message_invalid_is_ignored() {
+        let server = GameServer::new(
+            String::from("Test"),
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            false,
+            12345,
+            false,
+        );
+        let mut server_list = ServerList::new();
+        let server_id = server_list.add(server);
+
+        parse_game_message(&server_list, &server_id, r#"{"garbage":"data"}"#);
+
+        let updated = server_list.get(&Pagination::default());
+        assert_eq!(updated[0].players, 0); // unchanged
+    }
+
+    #[test]
+    fn parse_game_message_unknown_server_id_does_not_panic() {
+        let server_list = ServerList::new();
+        let unknown_id = Uuid::new_v4();
+        // should not panic or modify anything
+        parse_game_message(&server_list, &unknown_id, r#"{"players":5}"#);
+        assert_eq!(server_list.len(), 0);
+    }
+}
+
+#[cfg(test)]
+mod ws_tests {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use std::net::{Ipv4Addr, SocketAddr};
+    use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
+
+    /// Builds a minimal router using ConnectInfo for IP extraction.
+    fn test_router(app_state: AppState) -> Router {
+        Router::new()
+            .route("/api/list/servers", get(get_servers))
+            .route("/api/list/ws", get(websocket_handler))
+            .layer(ClientIpSource::ConnectInfo.into_extension())
+            .with_state(app_state)
+    }
+
+    /// Spawns the test router on a random port and returns its address alongside
+    /// a handle to the shared ServerList so tests can inspect state directly.
+    async fn spawn_test_server() -> (SocketAddr, ServerList) {
+        let server_list = ServerList::new();
+        let server_ip = IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4));
+        let app_state = AppState {
+            server_list: server_list.clone(),
+            server_ip,
+        };
+        let app = test_router(app_state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        (addr, server_list)
+    }
+
+    /// Connecting and sending a valid ConnectMessage registers the server.
+    #[tokio::test]
+    async fn ws_connect_registers_server() {
+        let (addr, server_list) = spawn_test_server().await;
+        let (mut ws, _) = connect_async(format!("ws://{}/api/list/ws", addr))
+            .await
+            .unwrap();
+
+        ws.send(WsMessage::text(
+            r#"{"name":"Test Server","port":12345,"tls":false}"#,
+        ))
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let servers = server_list.get(&Pagination::default());
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].players, 0);
+    }
+
+    /// Sending a status update message changes the player count on the server entry.
+    #[tokio::test]
+    async fn ws_player_update() {
+        let (addr, server_list) = spawn_test_server().await;
+        let (mut ws, _) = connect_async(format!("ws://{}/api/list/ws", addr))
+            .await
+            .unwrap();
+
+        ws.send(WsMessage::text(
+            r#"{"name":"Test Server","port":12345,"tls":false}"#,
+        ))
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        ws.send(WsMessage::text(r#"{"players":7}"#))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let servers = server_list.get(&Pagination::default());
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].players, 7);
+    }
+
+    /// Dropping the client connection removes the server from the list.
+    #[tokio::test]
+    async fn ws_disconnect_removes_server() {
+        let (addr, server_list) = spawn_test_server().await;
+        let (mut ws, _) = connect_async(format!("ws://{}/api/list/ws", addr))
+            .await
+            .unwrap();
+
+        ws.send(WsMessage::text(
+            r#"{"name":"Test Server","port":12345,"tls":false}"#,
+        ))
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(server_list.len(), 1);
+
+        drop(ws);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(server_list.len(), 0);
+    }
+
+    /// An invalid initial message causes the server to close the connection
+    /// without registering any server.
+    #[tokio::test]
+    async fn ws_invalid_connect_message_closes_connection() {
+        let (addr, server_list) = spawn_test_server().await;
+        let (mut ws, _) = connect_async(format!("ws://{}/api/list/ws", addr))
+            .await
+            .unwrap();
+
+        ws.send(WsMessage::text(r#"{"garbage":"data"}"#))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // No server should have been registered.
+        assert_eq!(server_list.len(), 0);
+        // The server closes its end; next read should be a close frame or error.
+        let next = ws.next().await;
+        assert!(next.map(|r| r.is_err()).unwrap_or(true));
+    }
 }
