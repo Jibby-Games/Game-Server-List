@@ -1,5 +1,5 @@
 # Use cargo chef to speed up builds
-FROM lukemathwalker/cargo-chef:0.1.62-rust-1.75-slim-bullseye AS chef
+FROM lukemathwalker/cargo-chef:0.1.77-rust-1.94.0-slim-trixie AS chef
 WORKDIR /app
 
 FROM chef AS planner
@@ -15,11 +15,11 @@ COPY . .
 RUN cargo build --release
 
 # We do not need the Rust toolchain to run the binary!
-FROM debian:bullseye-slim AS runtime
+FROM debian:trixie-slim AS runtime
 WORKDIR /app
 
 # Install curl for healthcheck
-RUN apt update && apt install -y curl
+RUN apt-get update && apt-get install -y curl
 
 HEALTHCHECK --interval=1m --timeout=10s --retries=3 --start-period=1m \
     CMD curl --fail localhost:3000/api/list/healthcheck || exit 1
