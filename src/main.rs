@@ -25,7 +25,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use axum_client_ip::{SecureClientIp, SecureClientIpSource};
+use axum_client_ip::{ClientIp, ClientIpSource};
 use game_server_list::{ConnectMessage, GameMessage, GameServer, Pagination, ServerList};
 use lazy_static::lazy_static;
 use prometheus::{IntCounter, IntGauge, Registry};
@@ -70,11 +70,11 @@ fn register_custom_metrics() {
 #[derive(serde::Deserialize, Debug)]
 struct Config {
     #[serde(default = "default_ip_source")]
-    ip_source: SecureClientIpSource,
+    ip_source: ClientIpSource,
 }
 
-fn default_ip_source() -> SecureClientIpSource {
-    SecureClientIpSource::ConnectInfo
+fn default_ip_source() -> ClientIpSource {
+    ClientIpSource::ConnectInfo
 }
 
 // shared app state
@@ -148,8 +148,8 @@ async fn main() {
     // run the server
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
     tracing::info!("listening on {}", addr);
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(shutdown_signal())
         .await
         .unwrap();
@@ -189,13 +189,12 @@ async fn healthcheck() -> &'static str {
 /// Returns the server list with all games on it
 #[instrument(skip(app_state))]
 async fn get_servers(
-    pagination: Option<Query<Pagination>>,
-    SecureClientIp(ip): SecureClientIp,
+    Query(pagination): Query<Pagination>,
+    ClientIp(ip): ClientIp,
     State(app_state): State<AppState>,
 ) -> impl IntoResponse {
     tracing::info!("sending server list");
     SERVER_LIST_REQUESTS.inc();
-    let Query(pagination) = pagination.unwrap_or_default();
     Json(app_state.server_list.get(&pagination))
 }
 
@@ -239,7 +238,7 @@ async fn get_metrics() -> impl IntoResponse {
 #[instrument(level = "debug", skip(ws, app_state))]
 async fn websocket_handler(
     ws: WebSocketUpgrade,
-    SecureClientIp(ip): SecureClientIp,
+    ClientIp(ip): ClientIp,
     State(app_state): State<AppState>,
 ) -> impl IntoResponse {
     tracing::info!("new websocket connection");
@@ -261,7 +260,7 @@ async fn handle_socket(
     match socket.recv().await {
         Some(result) => match result {
             Ok(msg) => match msg {
-                Message::Text(txt) => match parse_connect_message(txt, ip, server_ip) {
+                Message::Text(txt) => match parse_connect_message(txt.to_string(), ip, server_ip) {
                     Ok(server) => {
                         tracing::info!("created new game server: {:?}", server);
                         game_id = server_list.add(server);
