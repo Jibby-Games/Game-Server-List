@@ -95,6 +95,8 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    tracing::info!("starting game_server_list v{}", env!("CARGO_PKG_VERSION"));
+
     // create prometheus metrics
     register_custom_metrics();
 
