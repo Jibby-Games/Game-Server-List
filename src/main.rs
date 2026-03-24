@@ -296,7 +296,7 @@ async fn handle_socket(
     }
     // begin the main loop to update the game server state
     loop {
-        if let Some(msg_type) = socket.recv().await {
+        match socket.recv().await { Some(msg_type) => {
             match msg_type {
                 Ok(msg) => match msg {
                     Message::Text(t) => parse_game_message(&server_list, &game_id, &t),
@@ -313,10 +313,10 @@ async fn handle_socket(
                     break;
                 }
             }
-        } else {
+        } _ => {
             tracing::warn!("connection closed unexpectedly");
             break;
-        }
+        }}
     }
     // Make sure server is always removed if the loop finishes
     remove_server(server_list, &game_id);
