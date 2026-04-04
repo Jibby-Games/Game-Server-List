@@ -11,13 +11,23 @@ pub struct GameServer {
     name: String,
     ip: IpAddr,
     tls: bool,
-    port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    port: Option<u16>,
     official: bool,
     pub players: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    game_id: Option<Uuid>,
 }
 
 impl GameServer {
-    pub fn new(name: String, ip: IpAddr, tls: bool, port: u16, official: bool) -> GameServer {
+    pub fn new(
+        name: String,
+        ip: IpAddr,
+        tls: bool,
+        port: Option<u16>,
+        official: bool,
+        game_id: Option<Uuid>,
+    ) -> GameServer {
         GameServer {
             name,
             ip,
@@ -25,6 +35,7 @@ impl GameServer {
             port,
             official,
             players: 0,
+            game_id,
         }
     }
 }
@@ -33,6 +44,7 @@ impl GameServer {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ConnectMessage {
+    V3 { name: String, game_id: Uuid },
     V2 { name: String, port: u16, tls: bool },
     V1 { name: String, port: u16 },
 }
@@ -122,8 +134,9 @@ mod tests {
             String::from("Test"),
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
             false,
-            12345,
+            Some(12345),
             false,
+            None,
         );
         let mut server_list = ServerList::new();
         assert_eq!(server_list.len(), 0);
@@ -137,8 +150,9 @@ mod tests {
             String::from("Test"),
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
             false,
-            12345,
+            Some(12345),
             false,
+            None,
         );
         let mut server_list = ServerList::new();
         let uuid = server_list.add(server);
@@ -153,8 +167,9 @@ mod tests {
             String::from("Test"),
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
             false,
-            12345,
+            Some(12345),
             false,
+            None,
         );
         let expected = server.clone();
         let mut server_list = ServerList::new();
@@ -170,8 +185,9 @@ mod tests {
             String::from("Test"),
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
             false,
-            12345,
+            Some(12345),
             false,
+            None,
         );
         let mut server_list = ServerList::new();
         let server_id = server_list.add(server);

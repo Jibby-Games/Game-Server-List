@@ -347,19 +347,10 @@ fn remove_server(mut server_list: ServerList, game_id: &Uuid) {
 fn parse_connect_message(txt: String, ip: IpAddr, server_ip: IpAddr) -> Result<GameServer, String> {
     if let Ok(msg) = serde_json::from_str::<ConnectMessage>(&txt) {
         match msg {
-            ConnectMessage::V1 { name, port } => {
-                tracing::debug!("new game connected with V1 name: {} port: {}", name, port);
-                // if this IP is local then it's on the same host so
-                // replace the it with the server's public IP
-                let mut official = false;
-                let ip = if is_local_ipv4(ip) {
-                    official = true;
-                    server_ip
-                } else {
-                    ip
-                };
-
-                return Ok(GameServer::new(name, ip, false, port, official));
+            ConnectMessage::V3 { name, game_id } => {
+                tracing::debug!("new game connected with V3 name: {} game_id: {}", name, game_id);
+                // Game ID servers are always official and should always use TLS
+                return Ok(GameServer::new(name, server_ip, true, None, true, Some(game_id)));
             }
             ConnectMessage::V2 { name, tls, port } => {
                 tracing::debug!(
@@ -377,7 +368,21 @@ fn parse_connect_message(txt: String, ip: IpAddr, server_ip: IpAddr) -> Result<G
                 } else {
                     ip
                 };
-                return Ok(GameServer::new(name, ip, tls, port, official));
+                return Ok(GameServer::new(name, ip, tls, Some(port), official, None));
+            }
+            ConnectMessage::V1 { name, port } => {
+                tracing::debug!("new game connected with V1 name: {} port: {}", name, port);
+                // if this IP is local then it's on the same host so
+                // replace the it with the server's public IP
+                let mut official = false;
+                let ip = if is_local_ipv4(ip) {
+                    official = true;
+                    server_ip
+                } else {
+                    ip
+                };
+
+                return Ok(GameServer::new(name, ip, false, Some(port), official, None));
             }
         }
     }
@@ -411,54 +416,6 @@ mod tests {
     use std::net::Ipv4Addr;
 
     #[test]
-    fn parse_connect_message_v2() {
-        let txt = "{\"name\":\"Test's Game\",\"port\":31400,\"tls\":true}".to_string();
-        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
-        let server_ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
-        let expected_server = GameServer::new(
-            String::from("Test's Game"),
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            true,
-            31400,
-            false,
-        );
-        let result: Result<GameServer, String> = parse_connect_message(txt, ip, server_ip);
-        assert_eq!(result, Ok(expected_server));
-    }
-
-    #[test]
-    fn parse_connect_message_v2_reverse_order() {
-        let txt = "{\"tls\":true, \"port\":31400, \"name\":\"Test's Game\"}".to_string();
-        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
-        let server_ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
-        let expected_server = GameServer::new(
-            String::from("Test's Game"),
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            true,
-            31400,
-            false,
-        );
-        let result: Result<GameServer, String> = parse_connect_message(txt, ip, server_ip);
-        assert_eq!(result, Ok(expected_server));
-    }
-
-    #[test]
-    fn parse_connect_message_v2_official() {
-        let txt = "{\"name\":\"Another Game\",\"port\":65535,\"tls\":true}".to_string();
-        let ip = IpAddr::V4(Ipv4Addr::new(192, 168, 0, 123));
-        let server_ip = IpAddr::V4(Ipv4Addr::new(192, 168, 0, 123));
-        let expected_server = GameServer::new(
-            String::from("Another Game"),
-            IpAddr::V4(Ipv4Addr::new(192, 168, 0, 123)),
-            true,
-            65535,
-            true,
-        );
-        let result: Result<GameServer, String> = parse_connect_message(txt, ip, server_ip);
-        assert_eq!(result, Ok(expected_server));
-    }
-
-    #[test]
     fn parse_connect_message_v1() {
         let txt = "{\"name\":\"Test\",\"port\":12345}".to_string();
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
@@ -467,8 +424,9 @@ mod tests {
             String::from("Test"),
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
             false,
-            12345,
+            Some(12345),
             false,
+            None,
         );
         let result: Result<GameServer, String> = parse_connect_message(txt, ip, server_ip);
         assert_eq!(result, Ok(expected_server));
@@ -483,8 +441,9 @@ mod tests {
             String::from("Test"),
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
             false,
-            12345,
+            Some(12345),
             false,
+            None,
         );
         let result: Result<GameServer, String> = parse_connect_message(txt, ip, server_ip);
         assert_eq!(result, Ok(expected_server));
@@ -499,8 +458,78 @@ mod tests {
             String::from("Test"),
             IpAddr::V4(Ipv4Addr::new(172, 16, 0, 22)),
             false,
-            12345,
+            Some(12345),
             true,
+            None,
+        );
+        let result: Result<GameServer, String> = parse_connect_message(txt, ip, server_ip);
+        assert_eq!(result, Ok(expected_server));
+    }
+
+    #[test]
+    fn parse_connect_message_v2() {
+        let txt = "{\"name\":\"Test's Game\",\"port\":31400,\"tls\":true}".to_string();
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let server_ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let expected_server = GameServer::new(
+            String::from("Test's Game"),
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            true,
+            Some(31400),
+            false,
+            None,
+        );
+        let result: Result<GameServer, String> = parse_connect_message(txt, ip, server_ip);
+        assert_eq!(result, Ok(expected_server));
+    }
+
+    #[test]
+    fn parse_connect_message_v2_reverse_order() {
+        let txt = "{\"tls\":true, \"port\":31400, \"name\":\"Test's Game\"}".to_string();
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let server_ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let expected_server = GameServer::new(
+            String::from("Test's Game"),
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            true,
+            Some(31400),
+            false,
+            None,
+        );
+        let result: Result<GameServer, String> = parse_connect_message(txt, ip, server_ip);
+        assert_eq!(result, Ok(expected_server));
+    }
+
+    #[test]
+    fn parse_connect_message_v2_official() {
+        let txt = "{\"name\":\"Another Game\",\"port\":65535,\"tls\":true}".to_string();
+        let ip = IpAddr::V4(Ipv4Addr::new(192, 168, 0, 123));
+        let server_ip = IpAddr::V4(Ipv4Addr::new(192, 168, 0, 123));
+        let expected_server = GameServer::new(
+            String::from("Another Game"),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 0, 123)),
+            true,
+            Some(65535),
+            true,
+            None,
+        );
+        let result: Result<GameServer, String> = parse_connect_message(txt, ip, server_ip);
+        assert_eq!(result, Ok(expected_server));
+    }
+
+    #[test]
+    fn parse_connect_message_v3() {
+        let game_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let txt = format!("{{\"name\":\"Test V3\",\"game_id\":\"{}\"}}", game_id);
+        let ip = IpAddr::V4(Ipv4Addr::new(123, 123, 123, 123));
+        let server_ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let expected_server = GameServer::new(
+            String::from("Test V3"),
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            true,
+            None,
+            true,
+            Some(game_id),
         );
         let result: Result<GameServer, String> = parse_connect_message(txt, ip, server_ip);
         assert_eq!(result, Ok(expected_server));
@@ -521,8 +550,9 @@ mod tests {
             String::from("Test"),
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
             false,
-            12345,
+            Some(12345),
             false,
+            None,
         );
         let mut server_list = ServerList::new();
         let server_id = server_list.add(server);
@@ -539,8 +569,9 @@ mod tests {
             String::from("Test"),
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
             false,
-            12345,
+            Some(12345),
             false,
+            None,
         );
         let mut server_list = ServerList::new();
         let server_id = server_list.add(server);
