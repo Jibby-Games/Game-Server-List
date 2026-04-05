@@ -16,7 +16,7 @@ pub struct GameServer {
     official: bool,
     pub players: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    game_id: Option<Uuid>,
+    game_id: Option<String>,
 }
 
 impl GameServer {
@@ -26,7 +26,7 @@ impl GameServer {
         tls: bool,
         port: Option<u16>,
         official: bool,
-        game_id: Option<Uuid>,
+        game_id: Option<String>,
     ) -> GameServer {
         GameServer {
             name,
@@ -44,7 +44,7 @@ impl GameServer {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ConnectMessage {
-    V3 { name: String, game_id: Uuid },
+    V3 { name: String, game_id: String },
     V2 { name: String, port: u16, tls: bool },
     V1 { name: String, port: u16 },
 }
@@ -182,7 +182,6 @@ mod tests {
 
     #[test]
     fn get_server_multiple() {
-        let game_id = Uuid::new_v4();
         let servers_to_add = vec![
             // tls=true, official=true, game_id=Some
             GameServer::new(
@@ -191,7 +190,7 @@ mod tests {
                 true,
                 None,
                 true,
-                Some(game_id),
+                Some(String::from("ABCD1234")),
             ),
             // tls=true, official=false, game_id=None
             GameServer::new(
@@ -209,7 +208,7 @@ mod tests {
                 false,
                 None,
                 true,
-                Some(Uuid::new_v4()),
+                Some(String::from("EFGH-5678")),
             ),
             // tls=false, official=false, game_id=None
             GameServer::new(

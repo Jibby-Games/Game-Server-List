@@ -15,15 +15,15 @@
 //! ```
 
 use axum::{
+    Json, Router,
     error_handling::HandleErrorLayer,
     extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
         Query, State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::StatusCode,
     response::IntoResponse,
     routing::get,
-    Json, Router,
 };
 use axum_client_ip::{ClientIp, ClientIpSource};
 use game_server_list::{ConnectMessage, GameMessage, GameServer, Pagination, ServerList};
@@ -110,7 +110,9 @@ async fn main() {
             tracing::info!("found server's public ip: {}", ip);
             ip
         }
-        None => panic!("unable to find server's public ip address, please make sure it has a connection to the internet"),
+        None => panic!(
+            "unable to find server's public ip address, please make sure it has a connection to the internet"
+        ),
     };
 
     let app_state = AppState {
@@ -151,10 +153,13 @@ async fn main() {
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
     tracing::info!("listening on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .unwrap();
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .unwrap();
 }
 
 async fn shutdown_signal() {
@@ -256,7 +261,7 @@ async fn handle_socket(
     mut server_list: ServerList,
     server_ip: IpAddr,
 ) {
-    let game_id;
+    let server_id;
 
     // wait for the first message with initial server info
     match socket.recv().await {
@@ -265,7 +270,7 @@ async fn handle_socket(
                 Message::Text(txt) => match parse_connect_message(txt.to_string(), ip, server_ip) {
                     Ok(server) => {
                         tracing::info!("created new game server: {:?}", server);
-                        game_id = server_list.add(server);
+                        server_id = server_list.add(server);
                         // add server to metrics
                         CONNECTED_GAME_SERVERS.inc();
                     }
@@ -298,10 +303,10 @@ async fn handle_socket(
     }
     // begin the main loop to update the game server state
     loop {
-        match socket.recv().await { Some(msg_type) => {
-            match msg_type {
+        match socket.recv().await {
+            Some(msg_type) => match msg_type {
                 Ok(msg) => match msg {
-                    Message::Text(t) => parse_game_message(&server_list, &game_id, &t),
+                    Message::Text(t) => parse_game_message(&server_list, &server_id, &t),
                     Message::Close(_) => {
                         tracing::debug!("connection closed");
                         break;
@@ -314,14 +319,15 @@ async fn handle_socket(
                     tracing::error!("error while waiting for game message: {:?}", e);
                     break;
                 }
+            },
+            _ => {
+                tracing::warn!("connection closed unexpectedly");
+                break;
             }
-        } _ => {
-            tracing::warn!("connection closed unexpectedly");
-            break;
-        }}
+        }
     }
     // Make sure server is always removed if the loop finishes
-    remove_server(server_list, &game_id);
+    remove_server(server_list, &server_id);
 }
 
 fn is_local_ipv4(ip: IpAddr) -> bool {
@@ -331,14 +337,14 @@ fn is_local_ipv4(ip: IpAddr) -> bool {
     return false;
 }
 
-fn remove_server(mut server_list: ServerList, game_id: &Uuid) {
-    match server_list.remove(game_id) {
+fn remove_server(mut server_list: ServerList, server_id: &Uuid) {
+    match server_list.remove(server_id) {
         Some(entry) => {
             // remove players from metrics
             IN_GAME_PLAYERS.set(IN_GAME_PLAYERS.get() - i64::from(entry.players));
             tracing::info!("deleted game server: {:?}", entry)
         }
-        None => tracing::error!("failed to remove game server with id: {:?}", game_id),
+        None => tracing::error!("failed to remove game server with id: {:?}", server_id),
     }
     // remove server from metrics
     CONNECTED_GAME_SERVERS.dec();
@@ -348,9 +354,20 @@ fn parse_connect_message(txt: String, ip: IpAddr, server_ip: IpAddr) -> Result<G
     if let Ok(msg) = serde_json::from_str::<ConnectMessage>(&txt) {
         match msg {
             ConnectMessage::V3 { name, game_id } => {
-                tracing::debug!("new game connected with V3 name: {} game_id: {}", name, game_id);
+                tracing::debug!(
+                    "new game connected with V3 name: {} game_id: {}",
+                    name,
+                    game_id
+                );
                 // Game ID servers are always official and should always use TLS
-                return Ok(GameServer::new(name, server_ip, true, None, true, Some(game_id)));
+                return Ok(GameServer::new(
+                    name,
+                    server_ip,
+                    true,
+                    None,
+                    true,
+                    Some(game_id),
+                ));
             }
             ConnectMessage::V2 { name, tls, port } => {
                 tracing::debug!(
@@ -519,7 +536,7 @@ mod tests {
 
     #[test]
     fn parse_connect_message_v3() {
-        let game_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let game_id = "ND9283H0TN2982893D2".to_string();
         let txt = format!("{{\"name\":\"Test V3\",\"game_id\":\"{}\"}}", game_id);
         let ip = IpAddr::V4(Ipv4Addr::new(123, 123, 123, 123));
         let server_ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
@@ -666,9 +683,7 @@ mod ws_tests {
         .unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        ws.send(WsMessage::text(r#"{"players":7}"#))
-            .await
-            .unwrap();
+        ws.send(WsMessage::text(r#"{"players":7}"#)).await.unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         let servers = server_list.get(&Pagination::default());
