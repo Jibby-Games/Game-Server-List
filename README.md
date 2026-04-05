@@ -15,13 +15,14 @@ contains other microservices for the game.
 - Automatically flags game servers originating from the same IP as the Game Server List as
 "official" ones (can be useful on the game client).
 - Unit tested
-- Stores the following info for each game server:
+- Can store the following info for each game server:
   - Name: String
   - IP: IpAddr
   - TLS: bool
   - Port: u16
   - Official: bool
   - Players: u32 (updated in real time using messages from the game server)
+  - Game ID: Option<String> (codes which can be used to connect to game servers, e.g. http://example.com/join/ABCD-1234)
 
 ## API Overview
 - `GET /api/list/servers`: return a JSON list of active servers.
