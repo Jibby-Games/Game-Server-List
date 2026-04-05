@@ -179,6 +179,63 @@ mod tests {
         assert_eq!(servers.len(), 1);
         assert_eq!(servers[0], expected);
     }
+
+    #[test]
+    fn get_server_multiple() {
+        let game_id = Uuid::new_v4();
+        let servers_to_add = vec![
+            // tls=true, official=true, game_id=Some
+            GameServer::new(
+                String::from("TLS Official with GameID"),
+                IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+                true,
+                None,
+                true,
+                Some(game_id),
+            ),
+            // tls=true, official=false, game_id=None
+            GameServer::new(
+                String::from("TLS Unofficial no GameID"),
+                IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)),
+                true,
+                Some(8080),
+                false,
+                None,
+            ),
+            // tls=false, official=true, game_id=Some
+            GameServer::new(
+                String::from("No TLS Official with GameID"),
+                IpAddr::V4(Ipv4Addr::new(127, 0, 0, 3)),
+                false,
+                None,
+                true,
+                Some(Uuid::new_v4()),
+            ),
+            // tls=false, official=false, game_id=None
+            GameServer::new(
+                String::from("No TLS Unofficial no GameID"),
+                IpAddr::V4(Ipv4Addr::new(127, 0, 0, 4)),
+                false,
+                Some(12345),
+                false,
+                None,
+            ),
+        ];
+        let expected: Vec<GameServer> = servers_to_add.clone();
+        let mut server_list = ServerList::new();
+        for server in servers_to_add {
+            server_list.add(server);
+        }
+        let pagination = Pagination::default();
+        let mut servers = server_list.get(&pagination);
+        assert_eq!(servers.len(), 4);
+        // Sort both by name for deterministic comparison
+        servers.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut expected = expected;
+        expected.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(servers, expected);
+    }
+
     #[test]
     fn update_server() {
         let server = GameServer::new(
