@@ -239,7 +239,7 @@ async fn get_metrics() -> impl IntoResponse {
     buffer.clear();
 
     res.push_str(&res_custom);
-    return res;
+    res
 }
 
 #[instrument(level = "debug", skip(ws, app_state))]
@@ -332,9 +332,10 @@ async fn handle_socket(
 
 fn is_local_ipv4(ip: IpAddr) -> bool {
     if let IpAddr::V4(ipv4) = ip {
-        return ipv4.is_private();
+        ipv4.is_private()
+    } else {
+        false
     }
-    return false;
 }
 
 fn remove_server(mut server_list: ServerList, server_id: &Uuid) {
