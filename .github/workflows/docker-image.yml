@@ -10,6 +10,10 @@ on:
     branches:
       - "main"
 
+permissions:
+  contents: read
+  packages: read
+
 jobs:
   docker:
     runs-on: ubuntu-latest
